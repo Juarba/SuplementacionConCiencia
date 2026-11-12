@@ -8,6 +8,7 @@ const crear = () =>
     max: Number(process.env.DB_POOL_MAX || 5),
     idle_timeout: 20,
     connect_timeout: 10,
+    connection: { statement_timeout: '8000' }, // 8 segundos máximo por query
     onnotice: () => {},
     types: {
       // numeric y bigint como number de JS; fechas como texto tal cual están guardadas
