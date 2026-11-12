@@ -9,7 +9,7 @@ const crear = () =>
     idle_timeout: 20,
     connect_timeout: 10,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    connection: { statement_timeout: '8000' }, // 8 segundos máximo por query
+    connection: { statement_timeout: 8000 }, // 8 segundos máximo por query
     onnotice: () => {},
     types: {
       // numeric y bigint como number de JS; fechas como texto tal cual están guardadas
