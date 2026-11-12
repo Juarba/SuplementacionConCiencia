@@ -8,6 +8,7 @@ const crear = () =>
     max: Number(process.env.DB_POOL_MAX || 5),
     idle_timeout: 20,
     connect_timeout: 10,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
     connection: { statement_timeout: '8000' }, // 8 segundos máximo por query
     onnotice: () => {},
     types: {
