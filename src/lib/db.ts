@@ -7,6 +7,7 @@ const crear = () =>
     prepare: false, // requerido por el pooler de Supabase
     max: Number(process.env.DB_POOL_MAX || 5),
     idle_timeout: 20,
+    connect_timeout: 10,
     onnotice: () => {},
     types: {
       // numeric y bigint como number de JS; fechas como texto tal cual están guardadas

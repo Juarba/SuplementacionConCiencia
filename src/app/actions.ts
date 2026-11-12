@@ -30,9 +30,17 @@ async function accion<T>(fn: () => Promise<T>, mensaje?: string): Promise<Result
 }
 
 // ---------- sesión ----------
+async function getPassword() {
+  try {
+    const [row] = await sql<{ valor: string }[]>`select valor from config where clave = 'app_password' and valor != ''`
+    if (row?.valor) return row.valor
+  } catch { /* si la DB no está lista todavía, usa el env var */ }
+  return process.env.APP_PASSWORD || ''
+}
+
 export async function login(_: unknown, form: FormData) {
   const pass = String(form.get('password') || '')
-  const esperada = process.env.APP_PASSWORD
+  const esperada = await getPassword()
   if (!esperada) return { error: 'Falta configurar APP_PASSWORD en el servidor' }
   if (pass !== esperada) {
     await new Promise(r => setTimeout(r, 800)) // frena intentos por fuerza bruta
@@ -41,6 +49,16 @@ export async function login(_: unknown, form: FormData) {
   const { token, expira } = await crearToken()
   ;(await cookies()).set(COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: expira, path: '/' })
   redirect('/')
+}
+
+export async function cambiarPassword(d: { actual: string; nueva: string; confirmar: string }) {
+  return accion(async () => {
+    const esperada = await getPassword()
+    if (!esperada || d.actual !== esperada) throw new ErrorUsuario('Contraseña actual incorrecta')
+    if (!d.nueva || d.nueva.length < 6) throw new ErrorUsuario('La nueva contraseña debe tener al menos 6 caracteres')
+    if (d.nueva !== d.confirmar) throw new ErrorUsuario('Las contraseñas no coinciden')
+    await sql`insert into config (clave, valor) values ('app_password', ${d.nueva}) on conflict (clave) do update set valor = excluded.valor`
+  }, 'Contraseña actualizada')
 }
 
 export async function logout() {

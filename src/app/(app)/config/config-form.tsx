@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Download } from 'lucide-react'
-import { guardarConfig } from '@/app/actions'
+import { cambiarPassword, guardarConfig } from '@/app/actions'
 import { useAccion } from '@/components/acciones'
 import { Campo, PageHeader } from '@/components/common'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,23 @@ import type { Config } from '@/lib/types'
 import { CONFIG_INICIAL, NEGOCIO } from '@/negocio'
 
 const T = NEGOCIO.textos
+
+function PasswordForm() {
+  const { pending, run } = useAccion()
+  const [f, setF] = useState({ actual: '', nueva: '', confirmar: '' })
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
+  return (
+    <form className="grid gap-4" onSubmit={e => {
+      e.preventDefault()
+      run(() => cambiarPassword(f), { ok: () => setF({ actual: '', nueva: '', confirmar: '' }) })
+    }}>
+      <Campo label="Contraseña actual"><Input type="password" value={f.actual} onChange={set('actual')} autoComplete="current-password" /></Campo>
+      <Campo label="Nueva contraseña"><Input type="password" value={f.nueva} onChange={set('nueva')} autoComplete="new-password" /></Campo>
+      <Campo label="Confirmar nueva contraseña"><Input type="password" value={f.confirmar} onChange={set('confirmar')} autoComplete="new-password" /></Campo>
+      <Button type="submit" className="justify-self-start" disabled={pending}>Cambiar contraseña</Button>
+    </form>
+  )
+}
 
 export function ConfigForm({ cfg }: { cfg: Config }) {
   const { pending, run } = useAccion()
@@ -44,13 +61,21 @@ export function ConfigForm({ cfg }: { cfg: Config }) {
             </form>
           </CardContent>
         </Card>
-        <Card className="self-start">
-          <CardHeader>
-            <CardTitle>Copia de seguridad</CardTitle>
-            <CardDescription>Descargá todos tus datos en un archivo. Supabase también guarda copias según tu plan.</CardDescription>
-          </CardHeader>
-          <CardContent><Button variant="outline" asChild><a href="/api/backup"><Download /> Descargar copia (JSON)</a></Button></CardContent>
-        </Card>
+        <div className="grid gap-4">
+          <Card>
+            <CardHeader><CardTitle>Contraseña de acceso</CardTitle></CardHeader>
+            <CardContent>
+              <PasswordForm />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Copia de seguridad</CardTitle>
+              <CardDescription>Descargá todos tus datos en un archivo. Supabase también guarda copias según tu plan.</CardDescription>
+            </CardHeader>
+            <CardContent><Button variant="outline" asChild><a href="/api/backup"><Download /> Descargar copia (JSON)</a></Button></CardContent>
+          </Card>
+        </div>
       </div>
     </>
   )
