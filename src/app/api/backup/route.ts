@@ -8,7 +8,7 @@ import { NEGOCIO } from '@/negocio'
 export async function GET() {
   await requireSession()
   const out: Record<string, unknown> = { generado: ahoraLocal() }
-  for (const t of ['productos', 'clientes', 'ventas', 'venta_items', 'cc_movimientos', 'gastos', 'stock_movs', 'cierres'])
+  for (const t of ['productos', 'clientes', 'ventas', 'venta_items', 'cc_movimientos', 'gastos', 'stock_movs', 'cierres', 'comprobantes'])
     out[t] = await sql`select * from ${sql(t)} order by id`
   return new NextResponse(JSON.stringify(out, null, 1), {
     headers: {

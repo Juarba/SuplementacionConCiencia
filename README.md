@@ -52,6 +52,22 @@ Entrá al sistema → **Tienda Nube** y seguí los pasos. La URL de redirección
 en tu app de Tienda Nube aparece en esa pantalla (es `https://tu-proyecto.vercel.app/api/tn/callback`).
 Si el negocio no vende por Tienda Nube, poné `tiendanube: false` en `src/negocio.ts`.
 
+### 5. Facturación electrónica ARCA (opcional)
+Se conecta directo a los web services de ARCA (WSAA + WSFEv1), sin intermediarios.
+1. Si la base ya existía, volvé a correr `db/schema.sql` en el SQL Editor de Supabase (no borra nada).
+2. Entrá a **/ventas/arca/configurar** (ej. https://tu-proyecto.vercel.app/ventas/arca/configurar). Esta pantalla
+   no tiene ningún link en el menú, así el dueño del negocio solo ve **Ventas → Facturar ARCA**. Ahí cargá CUIT, razón social, condición frente al IVA y punto de venta.
+3. Tocá **Generar clave y CSR** y descargá el `.csr`. Subilo a ARCA (WSASS para pruebas, *Administración
+   de Certificados Digitales* para producción) y pegá el certificado que te devuelve. Los pasos exactos
+   están en esa pantalla.
+4. **Probar conexión**. Probá todo en *Homologación* y recién después pasá a *Producción*.
+5. Para facturar: **Ventas → Facturar ARCA** (lista de ventas sin facturar), abrí una venta en **Ventas**
+   → *Facturar en ARCA*, o tildá la opción en **Nueva venta**.
+   Al anular una venta facturada se emite la nota de crédito sola.
+
+Monotributo → Factura C. Responsable Inscripto → Factura A (a inscriptos y monotributistas) o B (al resto),
+con los precios tomados con IVA incluido. Si el negocio no factura, poné `facturacion: false` en `src/negocio.ts`.
+
 ## Desarrollo en la PC
 
 ```bash

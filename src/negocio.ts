@@ -45,6 +45,8 @@ export const NEGOCIO = {
     caja: true,
     /** Integración con Tienda Nube */
     tiendanube: true,
+    /** Factura electrónica con ARCA (ex AFIP) */
+    facturacion: true,
   },
 }
 

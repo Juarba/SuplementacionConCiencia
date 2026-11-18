@@ -46,3 +46,6 @@ next-env.d.ts
 
 # configuración local de Claude
 .claude
+
+.vercel
+.env*

@@ -7,6 +7,7 @@ export type Producto = {
 export type Cliente = {
   id: number; nombre: string; telefono: string | null; direccion: string | null
   tipo: 'cliente' | 'revendedor'; descuento: number | null; notas: string | null
+  doc_tipo: number | null; doc_nro: string | null; condicion_iva: number | null
   saldo: number; ultima_compra: string | null; total_comprado: number
 }
 export type VentaItem = { id: number; venta_id: number; producto_id: number | null; descripcion: string; cantidad: number; precio: number; costo: number }
@@ -15,6 +16,7 @@ export type Venta = {
   medio_pago: string; entrega: string | null; subtotal: number; descuento: number; recargo: number; envio: number
   total: number; costo: number; notas: string | null; origen: string; tn_order_id: string | null; anulada: boolean
   items: VentaItem[]
+  comprobantes: ComprobanteResumen[]
 }
 export type Movimiento = { id: number; cliente_id: number; fecha: string; tipo: 'cargo' | 'pago'; monto: number; descripcion: string | null; venta_id: number | null; medio_pago: string | null; saldo?: number }
 export type Gasto = { id: number; fecha: string; categoria: string; descripcion: string | null; monto: number; medio_pago: string | null }
@@ -40,3 +42,12 @@ export type Resumen = {
 }
 
 export type Resultado<T = unknown> = { ok: true; data?: T; mensaje?: string } | { ok: false; error: string }
+
+export type Comprobante = {
+  id: number; venta_id: number | null; fecha: string; tipo: number; punto_venta: number; numero: number
+  estado: 'pendiente' | 'autorizado'; cae: string | null; cae_vto: string | null
+  doc_tipo: number; doc_nro: string; condicion_iva: number; receptor_nombre: string | null; receptor_domicilio: string | null
+  neto: number; iva: number; alicuota: number; total: number; asociado_id: number | null
+  produccion: boolean; emisor_cuit: string; observaciones: string | null; creado: string
+}
+export type ComprobanteResumen = Pick<Comprobante, 'id' | 'tipo' | 'punto_venta' | 'numero' | 'estado' | 'produccion' | 'cae' | 'fecha' | 'total'>

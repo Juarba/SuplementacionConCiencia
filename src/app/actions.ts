@@ -10,6 +10,8 @@ import { ahoraLocal, hoyLocal } from '@/lib/format'
 import { getConfig, getMovimientosStock, resumenCaja } from '@/lib/queries'
 import { anularVenta, crearVenta, ErrorUsuario, moverStock, type NuevaVenta } from '@/lib/ventas'
 import * as TN from '@/lib/tiendanube'
+import * as ARCA from '@/lib/arca'
+import { cuitValido, nombreCbte, numeroCbte, type Receptor } from '@/lib/arca-datos'
 import type { Producto, Resultado } from '@/lib/types'
 
 const n = (v: unknown) => (v === '' || v == null || isNaN(Number(v)) ? 0 : Number(v))
@@ -76,16 +78,30 @@ export async function logout() {
 }
 
 // ---------- ventas ----------
-export async function registrarVenta(v: NuevaVenta) {
+export async function registrarVenta(v: NuevaVenta & { facturar?: boolean }) {
   return accion(async () => {
     const r = await crearVenta({ ...v, origen: 'local', tn_order_id: null })
     await TN.autoPublicar(r.productos)
-    return r
+    // La venta ya quedó guardada: si falla la factura se avisa y se puede facturar después desde Ventas
+    let factura: { id: number; nombre: string } | null = null, errorFactura: string | null = null
+    if (v.facturar) {
+      try {
+        const c = await ARCA.facturarVenta(r.id)
+        factura = { id: c.id, nombre: `${nombreCbte(c.tipo)} ${numeroCbte(c.punto_venta, c.numero)}` }
+      } catch (e) { errorFactura = (e as Error).message }
+    }
+    return { ...r, factura, errorFactura }
   })
 }
 
 export async function anular(id: number) {
-  return accion(async () => { const r = await anularVenta(id); await TN.autoPublicar(r.productos) }, 'Venta anulada')
+  return accion(async () => {
+    // Si la venta tiene factura, primero se anula en ARCA con una nota de crédito (si ARCA la rechaza, la venta no se anula)
+    const nc = await ARCA.notaCreditoVenta(id)
+    const r = await anularVenta(id)
+    await TN.autoPublicar(r.productos)
+    return nc ? { id: nc.id } : null
+  }, 'Venta anulada')
 }
 
 // ---------- productos ----------
@@ -161,7 +177,10 @@ export async function actualizarPrecios(d: { marca: string; porc_costo: number |
 }
 
 // ---------- clientes y cuenta corriente ----------
-export type ClienteForm = { id?: number; nombre: string; telefono?: string; direccion?: string; tipo: string; descuento?: number | string | null; notas?: string }
+export type ClienteForm = {
+  id?: number; nombre: string; telefono?: string; direccion?: string; tipo: string; descuento?: number | string | null; notas?: string
+  doc_tipo?: number | string | null; doc_nro?: string | null; condicion_iva?: number | string | null
+}
 
 export async function guardarCliente(c: ClienteForm) {
   return accion(async () => {
@@ -169,7 +188,9 @@ export async function guardarCliente(c: ClienteForm) {
     const datos = {
       nombre: c.nombre.trim(), telefono: txt(c.telefono), direccion: txt(c.direccion),
       tipo: c.tipo === 'revendedor' ? 'revendedor' : 'cliente', descuento: nOrNull(c.descuento), notas: txt(c.notas),
+      doc_tipo: nOrNull(c.doc_tipo), doc_nro: txt(c.doc_nro?.replace(/\D/g, '')), condicion_iva: nOrNull(c.condicion_iva),
     }
+    if (datos.doc_tipo && [80, 86].includes(datos.doc_tipo) && !cuitValido(datos.doc_nro || '')) throw new ErrorUsuario('El CUIT/CUIL no es válido')
     if (c.id) { await sql`update clientes set ${sql(datos)} where id = ${c.id}`; return c.id }
     const [{ id }] = await sql<{ id: number }[]>`insert into clientes ${sql(datos)} returning id`
     return id
@@ -232,7 +253,8 @@ export async function cerrarCaja(fecha: string, d: { efectivo_inicial: number | 
 
 // ---------- configuración ----------
 const CLAVES = ['negocio', 'medios_pago', 'descuento_revendedor', 'categorias_gastos',
-  'tn_store_id', 'tn_token', 'tn_email', 'tn_auto_stock', 'tn_app_id', 'tn_client_secret']
+  'tn_store_id', 'tn_token', 'tn_email', 'tn_auto_stock', 'tn_app_id', 'tn_client_secret',
+  'arca_cuit', 'arca_razon_social', 'arca_domicilio', 'arca_iibb', 'arca_inicio', 'arca_condicion', 'arca_pto_vta', 'arca_alicuota', 'arca_produccion']
 
 export async function guardarConfig(d: Record<string, string>) {
   return accion(async () => {
@@ -258,4 +280,17 @@ export async function tnUrlAutorizar() {
   await requireSession()
   const cfg = await getConfig()
   return cfg.tn_app_id ? `https://www.tiendanube.com/apps/${encodeURIComponent(cfg.tn_app_id)}/authorize` : null
+}
+
+// ---------- Facturación electrónica ARCA ----------
+export const arcaProbar = async () => accion(ARCA.probar)
+export const arcaGenerarClave = async (alias: string) => accion(() => ARCA.generarClave(alias), 'Clave y pedido de certificado generados')
+export const arcaImportarClave = async (pem: string) => accion(() => ARCA.importarClave(pem), 'Clave privada guardada')
+export const arcaGuardarCertificado = async (entorno: 'homo' | 'prod', pem: string) =>
+  accion(() => ARCA.guardarCertificado(entorno, pem), pem.trim() ? 'Certificado guardado' : 'Certificado borrado')
+export const arcaVerificarPendientes = async () => accion(ARCA.verificarPendientes)
+export const arcaFacturar = async (ventaId: number, receptor?: Receptor) => accion(() => ARCA.facturarVenta(ventaId, receptor), 'Comprobante autorizado por ARCA')
+export async function arcaReceptor(ventaId: number) {
+  await requireSession()
+  return ARCA.receptorDeVenta(ventaId)
 }

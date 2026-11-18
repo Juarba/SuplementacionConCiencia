@@ -9,6 +9,8 @@ import { Campo, NativeSelect, Pill, tonoStock } from '@/components/common'
 import { ClienteDialog } from '@/components/cliente-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -23,7 +25,7 @@ type Item = { key: number; producto_id: number | null; descripcion: string; cant
 
 const T = NEGOCIO.textos
 
-export function VentaForm({ productos, clientes, medios }: { productos: Producto[]; clientes: Cliente[]; medios: MedioPago[] }) {
+export function VentaForm({ productos, clientes, medios, arca = false }: { productos: Producto[]; clientes: Cliente[]; medios: MedioPago[]; arca?: boolean }) {
   const { pending, run } = useAccion()
   const [items, setItems] = useState<Item[]>([])
   const [clienteId, setClienteId] = useState<number | null>(null)
@@ -36,6 +38,7 @@ export function VentaForm({ productos, clientes, medios }: { productos: Producto
   const [entrega, setEntrega] = useState('')
   const [fecha, setFecha] = useState(() => ahoraLocal().replace(' ', 'T'))
   const [notas, setNotas] = useState('')
+  const [facturar, setFacturar] = useState(false)
   const [busqueda, setBusqueda] = useState('')
   const [abrirCliente, setAbrirCliente] = useState(false)
   const [nuevoCliente, setNuevoCliente] = useState(false)
@@ -91,10 +94,12 @@ export function VentaForm({ productos, clientes, medios }: { productos: Producto
     run(() => registrarVenta({
       items: items.map(({ producto_id, descripcion, cantidad, precio, costo }) => ({ producto_id, descripcion, cantidad, precio, costo })),
       cliente_id: clienteId, tipo_precio: tipoPrecio, medio_pago: medio, descuento, recargo, envio: envioN,
-      entrega, notas, fecha: fecha.replace('T', ' '),
+      entrega, notas, fecha: fecha.replace('T', ' '), facturar: arca && facturar,
     }), {
       ok: r => {
         toast.success(`Venta #${r?.id} registrada: ${money(r?.total)}`)
+        if (r?.factura) { const id = r.factura.id; toast.success(`${r.factura.nombre} autorizada por ARCA`, { action: { label: 'Ver', onClick: () => window.open(`/comprobante/${id}`, '_blank') } }) }
+        if (r?.errorFactura) toast.error(`La venta se guardó pero no se pudo facturar: ${r.errorFactura}. Podés reintentar desde Ventas.`, { duration: 15000 })
         setItems([]); setClienteId(null); setTipoPrecio('publico'); setMedio('Efectivo'); setDescPct(''); setDescMonto('')
         setRecargoManual(null); setEnvio(''); setEntrega(''); setNotas(''); setFecha(ahoraLocal().replace(' ', 'T'))
       },
@@ -248,6 +253,7 @@ export function VentaForm({ productos, clientes, medios }: { productos: Producto
             </div>
             <Fila label="Ganancia estimada" valor={<span className={signo(ganancia)}>{money(ganancia)} {total > 0 && `(${pct(ganancia / total)})`}</span>} muted />
           </div>
+          {arca && <Label className="flex items-center gap-2 font-normal"><Checkbox checked={facturar} onCheckedChange={v => setFacturar(!!v)} /> Facturar en ARCA {cliente?.doc_nro ? `(a ${cliente.nombre})` : '(consumidor final)'}</Label>}
           <Button size="lg" className="mt-2 h-10" disabled={pending} onClick={guardar}>{pending ? 'Guardando…' : 'Registrar venta'}</Button>
         </CardContent>
       </Card>
