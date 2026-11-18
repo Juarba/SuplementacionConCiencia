@@ -1,7 +1,7 @@
 import 'server-only'
 import { sql } from './db'
 import { hoyLocal, ultimoDia } from './format'
-import type { Cierre, Cliente, Config, Gasto, Movimiento, Producto, Resumen, StockMov, Venta, VentaItem } from './types'
+import type { Cierre, Cliente, Comprobante, ComprobanteResumen, Config, Gasto, Movimiento, Producto, Resumen, StockMov, Venta, VentaItem } from './types'
 
 export async function getConfig(): Promise<Config> {
   const rows = await sql<{ clave: string; valor: string }[]>`select clave, valor from config`
@@ -12,6 +12,9 @@ export async function getConfig(): Promise<Config> {
 export async function getConfigPublica(): Promise<Config> {
   const c = await getConfig()
   for (const k of ['tn_token', 'tn_client_secret']) c[k] = c[k] ? '••••••' + c[k].slice(-4) : ''
+  // la clave privada de ARCA y los permisos nunca salen del servidor
+  c.arca_key_ok = c.arca_key ? '1' : ''
+  for (const k of ['arca_key', 'arca_ta_homo', 'arca_ta_prod']) delete c[k]
   return c
 }
 
@@ -50,10 +53,37 @@ export async function getCuenta(id: number) {
 export async function getVentas(desde: string, hasta: string): Promise<Venta[]> {
   const ventas = await sql<Venta[]>`select * from ventas where fecha >= ${desde}::date and fecha < ${hasta}::date + 1 order by fecha desc, id desc`
   if (!ventas.length) return []
-  const items = await sql<VentaItem[]>`select * from venta_items where venta_id in ${sql(ventas.map(v => v.id))} order by id`
-  const por: Record<number, VentaItem[]> = {}
+  const ids = ventas.map(v => v.id)
+  const [items, cbtes] = await Promise.all([
+    sql<VentaItem[]>`select * from venta_items where venta_id in ${sql(ids)} order by id`,
+    sql<(ComprobanteResumen & { venta_id: number })[]>`select id, venta_id, tipo, punto_venta, numero, estado, produccion, cae, fecha, total from comprobantes where venta_id in ${sql(ids)} order by id`,
+  ])
+  const por: Record<number, VentaItem[]> = {}, cpor: Record<number, ComprobanteResumen[]> = {}
   for (const it of items) (por[it.venta_id] ||= []).push(it)
-  return ventas.map(v => ({ ...v, items: por[v.id] || [] }))
+  for (const c of cbtes) (cpor[c.venta_id] ||= []).push(c)
+  return ventas.map(v => ({ ...v, items: por[v.id] || [], comprobantes: cpor[v.id] || [] }))
+}
+
+/** Ventas no anuladas sin factura vigente (en el entorno actual) desde una fecha */
+export const getVentasSinFacturar = (desde: string, produccion: boolean) => sql<Pick<Venta, 'id' | 'fecha' | 'cliente_nombre' | 'medio_pago' | 'total'>[]>`
+  select v.id, v.fecha, v.cliente_nombre, v.medio_pago, v.total from ventas v
+  where not v.anulada and v.fecha >= ${desde}::date and v.total > 0
+    and (select count(*) from comprobantes c where c.venta_id = v.id and c.estado = 'autorizado' and c.produccion = ${produccion} and c.tipo in (1, 6, 11))
+     <= (select count(*) from comprobantes c where c.venta_id = v.id and c.estado = 'autorizado' and c.produccion = ${produccion} and c.tipo in (3, 8, 13))
+  order by v.fecha desc, v.id desc limit 200`
+
+export const getComprobantes = (limite = 50) =>
+  sql<Comprobante[]>`select * from comprobantes order by id desc limit ${limite}`
+
+export async function getComprobante(id: number) {
+  const [c] = await sql<Comprobante[]>`select * from comprobantes where id = ${id}`
+  if (!c) return null
+  const [items, asociado] = await Promise.all([
+    c.venta_id ? sql<VentaItem[]>`select * from venta_items where venta_id = ${c.venta_id} order by id` : [],
+    c.asociado_id ? sql<Comprobante[]>`select * from comprobantes where id = ${c.asociado_id}` : [],
+  ])
+  const [venta] = c.venta_id ? await sql<Venta[]>`select * from ventas where id = ${c.venta_id}` : []
+  return { ...c, items: items as VentaItem[], venta: venta ?? null, asociado: (asociado as Comprobante[])[0] ?? null }
 }
 
 export const getGastos = (desde: string, hasta: string) =>

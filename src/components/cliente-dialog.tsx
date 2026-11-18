@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { CONDICIONES_IVA, DOC_TIPOS } from '@/lib/arca-datos'
 import type { Cliente } from '@/lib/types'
 import { NEGOCIO } from '@/negocio'
 
@@ -27,8 +28,9 @@ export function ClienteDialog(props: Props) {
 function Formulario({ onOpenChange, cliente, tipo = 'cliente', onGuardado }: Props) {
   const { pending, run } = useAccion()
   const [f, setF] = useState<ClienteForm>(() => cliente
-    ? { ...cliente, telefono: cliente.telefono ?? '', direccion: cliente.direccion ?? '', descuento: cliente.descuento ?? '', notas: cliente.notas ?? '' }
-    : { nombre: '', telefono: '', direccion: '', tipo, descuento: '', notas: '' })
+    ? { ...cliente, telefono: cliente.telefono ?? '', direccion: cliente.direccion ?? '', descuento: cliente.descuento ?? '', notas: cliente.notas ?? '',
+        doc_tipo: cliente.doc_tipo ?? 99, doc_nro: cliente.doc_nro ?? '', condicion_iva: cliente.condicion_iva ?? 5 }
+    : { nombre: '', telefono: '', direccion: '', tipo, descuento: '', notas: '', doc_tipo: 99, doc_nro: '', condicion_iva: 5 })
   const set = (k: keyof ClienteForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value })
 
   return (
@@ -55,6 +57,17 @@ function Formulario({ onOpenChange, cliente, tipo = 'cliente', onGuardado }: Pro
           <Campo label={`Descuento especial % sobre precio público (vacío = usa la lista de ${T.mayorista.toLowerCase()})`}>
             <Input type="number" step="any" value={f.descuento ?? ''} onChange={set('descuento')} />
           </Campo>
+        )}
+        {NEGOCIO.modulos.facturacion && (
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr]">
+            <Campo label="Condición frente al IVA">
+              <NativeSelect value={f.condicion_iva ?? 5} onChange={set('condicion_iva')}>{CONDICIONES_IVA.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}</NativeSelect>
+            </Campo>
+            <Campo label="Documento">
+              <NativeSelect value={f.doc_tipo ?? 99} onChange={set('doc_tipo')}>{DOC_TIPOS.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}</NativeSelect>
+            </Campo>
+            <Campo label="Número (para facturar)"><Input inputMode="numeric" disabled={Number(f.doc_tipo) === 99} value={f.doc_nro ?? ''} onChange={set('doc_nro')} /></Campo>
+          </div>
         )}
         <Campo label="Notas"><Textarea rows={2} value={f.notas ?? ''} onChange={set('notas')} /></Campo>
         <DialogFooter>
