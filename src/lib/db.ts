@@ -2,13 +2,18 @@ import 'server-only'
 import postgres from 'postgres'
 
 // Conexión directa a Postgres (Supabase). En Vercel usar la URL del "transaction pooler" (puerto 6543).
+// En Vercel cada instancia abre su propio pool: las conexiones ociosas se sueltan rápido para no
+// acumular clientes en el pooler de Supabase. Con el transaction pooler (6543) 5 por instancia está bien;
+// menos hace que las páginas con muchas consultas (Inicio, Reportes) las ejecuten en fila y tarden.
+const prod = process.env.NODE_ENV === 'production'
 const crear = () =>
   postgres(process.env.DATABASE_URL!, {
     prepare: false, // requerido por el pooler de Supabase
     max: Number(process.env.DB_POOL_MAX || 5),
-    idle_timeout: 20,
+    idle_timeout: prod ? 10 : 20,
+    max_lifetime: 60 * 5,
     connect_timeout: 10,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: prod ? { rejectUnauthorized: false } : false,
     connection: { statement_timeout: 8000 }, // 8 segundos máximo por query
     onnotice: () => {},
     types: {
