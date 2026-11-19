@@ -1,5 +1,5 @@
 import 'server-only'
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { sql } from './db'
 import { ahoraLocal, hoyLocal } from './format'
 import { getConfig } from './queries'
@@ -223,30 +223,41 @@ async function webhooksDeOrdenes() {
   catch (e) { if (e instanceof TnError && e.status === 404) return []; throw e }
 }
 
-/** Le pide a Tienda Nube que avise a `url` cada vez que se paga una orden (reemplaza avisos viejos a otras URLs) */
-export async function activarAviso(url: string) {
+/**
+ * Le pide a Tienda Nube que avise a `base` cada vez que se paga una orden (reemplaza avisos viejos).
+ * La URL lleva una clave al azar (?k=...) para que nadie más pueda mandar avisos; no hace falta Client Secret.
+ */
+export async function activarAviso(base: string) {
+  if (!base.startsWith('https://') || /localhost|tiendanube|nuvemshop/i.test(base))
+    throw new ErrorUsuario(`Tienda Nube no acepta avisos a ${base}: abrí el sistema desde su dirección pública (https) y probá de nuevo`)
   const cfg = await getConfig()
-  if (!cfg.tn_client_secret) throw new ErrorUsuario('Guardá el Client Secret de tu app: se usa para verificar que el aviso viene de Tienda Nube')
-  if (!url.startsWith('https://') || /localhost|tiendanube|nuvemshop/i.test(url))
-    throw new ErrorUsuario(`Tienda Nube no acepta avisos a ${url}: abrí el sistema desde su dirección pública (https) y probá de nuevo`)
+  const clave = cfg.tn_aviso_clave || randomBytes(24).toString('hex')
+  const url = `${base}?k=${clave}`
   const actuales = await webhooksDeOrdenes()
   for (const w of actuales) if (w.url !== url) await tn('DELETE', `/webhooks/${w.id}`)
   if (!actuales.some(w => w.url === url)) await tn('POST', '/webhooks', { event: EVENTO, url })
-  await sql`insert into config (clave, valor) values ('tn_aviso_url', ${url}) on conflict (clave) do update set valor = excluded.valor`
+  await sql`insert into config ${sql([{ clave: 'tn_aviso_url', valor: base }, { clave: 'tn_aviso_clave', valor: clave }])}
+    on conflict (clave) do update set valor = excluded.valor`
 }
 
 export async function desactivarAviso() {
   for (const w of await webhooksDeOrdenes()) await tn('DELETE', `/webhooks/${w.id}`)
-  await sql`update config set valor = '' where clave = 'tn_aviso_url'`
+  await sql`update config set valor = '' where clave in ('tn_aviso_url', 'tn_aviso_clave')`
 }
 
-/** Verifica la firma del aviso: HMAC-SHA256 (hex) del cuerpo tal cual llegó, con el Client Secret de la app */
-export async function firmaValida(cuerpo: string, firma: string | null) {
+const igualesSeguro = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b)
+
+/**
+ * El aviso es válido si trae la clave de la URL, o la firma de Tienda Nube (HMAC-SHA256 hex del cuerpo
+ * con el Client Secret de la app, si está cargado). Igual el contenido no se usa: la orden se vuelve a
+ * pedir a Tienda Nube con el token.
+ */
+export async function avisoValido(cuerpo: string, firma: string | null, clave: string | null) {
   const cfg = await getConfig()
-  if (!cfg.tn_client_secret || !firma) return false
-  const esperada = createHmac('sha256', cfg.tn_client_secret).update(cuerpo, 'utf8').digest()
-  const recibida = Buffer.from(firma.trim(), 'hex')
-  return recibida.length === esperada.length && timingSafeEqual(recibida, esperada)
+  if (cfg.tn_aviso_clave && clave && igualesSeguro(Buffer.from(clave), Buffer.from(cfg.tn_aviso_clave))) return true
+  if (cfg.tn_client_secret && firma)
+    return igualesSeguro(Buffer.from(firma.trim(), 'hex'), createHmac('sha256', cfg.tn_client_secret).update(cuerpo, 'utf8').digest())
+  return false
 }
 
 export async function tiendaConfigurada() {

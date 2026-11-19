@@ -14,7 +14,7 @@ export async function getConfigPublica(): Promise<Config> {
   for (const k of ['tn_token', 'tn_client_secret']) c[k] = c[k] ? '••••••' + c[k].slice(-4) : ''
   // la clave privada de ARCA y los permisos nunca salen del servidor
   c.arca_key_ok = c.arca_key ? '1' : ''
-  for (const k of ['arca_key', 'arca_ta_homo', 'arca_ta_prod']) delete c[k]
+  for (const k of ['arca_key', 'arca_ta_homo', 'arca_ta_prod', 'tn_aviso_clave']) delete c[k]
   return c
 }
 

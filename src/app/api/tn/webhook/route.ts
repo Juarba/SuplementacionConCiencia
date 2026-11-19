@@ -1,13 +1,14 @@
 import { after, NextResponse, type NextRequest } from 'next/server'
-import { firmaValida, importarOrdenPorId, tiendaConfigurada } from '@/lib/tiendanube'
+import { avisoValido, importarOrdenPorId, tiendaConfigurada } from '@/lib/tiendanube'
 
 // Tienda Nube avisa acá cada vez que se paga una orden (se activa desde la pantalla Tienda Nube).
 // Espera respuesta en menos de 3 segundos: respondo enseguida y la importación corre después.
 // Si el aviso llega repetido, la orden no se duplica (tn_order_id es único).
+// Del aviso solo se usa el número de orden: la orden se vuelve a pedir a Tienda Nube y se importa solo si está pagada.
 export async function POST(req: NextRequest) {
   const cuerpo = await req.text()
-  if (!(await firmaValida(cuerpo, req.headers.get('x-linkedstore-hmac-sha256'))))
-    return NextResponse.json({ error: 'firma inválida' }, { status: 401 })
+  if (!(await avisoValido(cuerpo, req.headers.get('x-linkedstore-hmac-sha256'), req.nextUrl.searchParams.get('k'))))
+    return NextResponse.json({ error: 'aviso no autorizado' }, { status: 401 })
 
   let aviso: { store_id?: number | string; event?: string; id?: number | string }
   try { aviso = JSON.parse(cuerpo) } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
