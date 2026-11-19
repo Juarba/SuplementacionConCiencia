@@ -270,6 +270,7 @@ export const tnProbar = async () => accion(TN.probar)
 export const tnProductos = async () => accion(TN.productosTN)
 export const tnVincularAuto = async () => accion(TN.vincularAuto)
 export const tnImportar = async (desde: string) => accion(() => TN.importarOrdenes(desde))
+export const tnRecalcularCostos = async () => accion(TN.recalcularCostos)
 export const tnPublicar = async (opc: { stock: boolean; precio: boolean }) => accion(() => TN.publicar(null, opc))
 export async function tnVincular(productoId: number, tnProductId: number | null, tnVariantId: number | null) {
   return accion(async () => {

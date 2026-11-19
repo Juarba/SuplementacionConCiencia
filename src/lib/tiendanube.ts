@@ -65,18 +65,34 @@ export async function probar() {
   return texto(s.name)
 }
 
-export type TnVariante = { tn_product_id: number; tn_variant_id: number; nombre: string; sku: string; precio: number; stock: number | null }
+export type TnVariante = { tn_product_id: number; tn_variant_id: number; nombre: string; sku: string; precio: number; costo: number; stock: number | null }
 
 export async function productosTN(): Promise<TnVariante[]> {
-  type P = { id: number; name: TnTexto; variants?: { id: number; price: string; stock: number | null; sku: string | null; values?: TnTexto[] }[] }
+  type P = { id: number; name: TnTexto; variants?: { id: number; price: string; cost?: string | null; stock: number | null; sku: string | null; values?: TnTexto[] }[] }
   const prods = await paginado<P>('/products')
   return prods.flatMap(p => (p.variants || []).map(v => {
     const valores = (v.values || []).map(texto).filter(Boolean).join(' / ')
-    return { tn_product_id: p.id, tn_variant_id: v.id, nombre: texto(p.name) + (valores ? ' — ' + valores : ''), sku: v.sku || '', precio: num(v.price), stock: v.stock }
+    return { tn_product_id: p.id, tn_variant_id: v.id, nombre: texto(p.name) + (valores ? ' — ' + valores : ''), sku: v.sku || '', precio: num(v.price), costo: num(v.cost), stock: v.stock }
   }))
 }
 
 const normalizar = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+
+/** Busca el producto del sistema para un ítem de TN: por variante vinculada, después por SKU y por nombre */
+async function buscarProducto(variantId: number | null | undefined, sku: string | null | undefined, nombre: string) {
+  if (variantId) {
+    const [p] = await sql<Producto[]>`select * from productos where tn_variant_id = ${variantId}`
+    if (p) return p
+  }
+  if (sku?.trim()) {
+    const [p] = await sql<Producto[]>`select * from productos where upper(trim(sku)) = ${sku.trim().toUpperCase()} limit 1`
+    if (p) return p
+  }
+  const nn = normalizar(nombre)
+  if (!nn) return undefined
+  const todos = await sql<Producto[]>`select * from productos`
+  return todos.find(p => normalizar(p.nombre) === nn || normalizar(`${p.marca} ${p.nombre}`) === nn)
+}
 
 export async function vincularAuto() {
   const tnProds = await productosTN()
@@ -125,21 +141,24 @@ export async function importarOrdenes(desde?: string) {
   type O = {
     id: number; number: number; status: string; created_at: string; paid_at?: string; total: string; shipping_cost_customer?: string
     customer?: { name?: string }; contact_name?: string; gateway_name?: string; shipping_option?: TnTexto
-    products?: { variant_id: number | null; name: string; price: string; quantity: string | number }[]
+    products?: { variant_id: number | null; sku?: string | null; name: string; price: string; quantity: string | number }[]
   }
   // un día antes por las dudas de la zona horaria: las órdenes ya importadas se saltean
   const antes = new Date(Date.parse(min + 'T00:00:00Z') - 86400000).toISOString()
   const ordenes = await paginado<O>(`/orders?payment_status=paid&created_at_min=${encodeURIComponent(antes)}`)
   const res = { importadas: 0, existentes: 0, sinVincular: [] as string[], errores: [] as string[] }
+  // las ventas de TN usan el costo cargado en Tienda Nube; el del sistema queda como respaldo
+  const costos = ordenes.length ? await costosPorVariante() : new Map<number, number>()
   for (const o of ordenes) {
     if (o.status === 'cancelled') continue
     const [ya] = await sql`select id from ventas where tn_order_id = ${String(o.id)}`
     if (ya) { res.existentes++; continue }
     const items = []
     for (const it of o.products || []) {
-      const [p] = it.variant_id ? await sql<Producto[]>`select * from productos where tn_variant_id = ${it.variant_id}` : []
+      const p = await buscarProducto(it.variant_id, it.sku, it.name)
       if (!p) res.sinVincular.push(`Orden #${o.number}: ${it.name}`)
-      items.push({ producto_id: p ? p.id : null, descripcion: p ? `${p.marca} ${p.nombre}`.trim() : `[TN] ${it.name}`, cantidad: num(it.quantity), precio: num(it.price) })
+      const costo = (it.variant_id && costos.get(it.variant_id)) || undefined // undefined → crearVenta usa el costo del sistema
+      items.push({ producto_id: p ? p.id : null, descripcion: p ? `${p.marca} ${p.nombre}`.trim() : `[TN] ${it.name}`, cantidad: num(it.quantity), precio: num(it.price), costo })
     }
     const subtotal = items.reduce((a, i) => a + i.cantidad * i.precio, 0)
     const envio = num(o.shipping_cost_customer)
@@ -160,5 +179,60 @@ export async function importarOrdenes(desde?: string) {
     } catch (e) { res.errores.push(`Orden #${o.number}: ${(e as Error).message}`) }
   }
   await sql`update config set valor = ${hoyLocal()} where clave = 'tn_ultima_importacion'`
+  return res
+}
+
+/** Costos cargados en Tienda Nube por variante */
+async function costosPorVariante() {
+  const m = new Map<number, number>()
+  for (const v of await productosTN()) if (v.costo > 0) m.set(v.tn_variant_id, v.costo)
+  return m
+}
+
+/**
+ * Pone en las ventas de Tienda Nube ya importadas el costo cargado hoy en Tienda Nube
+ * (si TN no tiene costo para ese producto, usa el del sistema cuando el ítem está en $0). No toca el stock.
+ */
+export async function recalcularCostos() {
+  const items = await sql<{ id: number; venta_id: number; producto_id: number | null; descripcion: string; costo: number; tn_order_id: string | null; fecha: string }[]>`
+    select vi.id, vi.venta_id, vi.producto_id, vi.descripcion, vi.costo, v.tn_order_id, to_char(v.fecha, 'YYYY-MM-DD') fecha from venta_items vi
+    join ventas v on v.id = vi.venta_id
+    where v.origen = 'tiendanube'
+    order by vi.id`
+  const res = { actualizados: 0, sinCosto: [] as string[] }
+  if (!items.length) return res
+  const costos = await costosPorVariante()
+
+  // Ítems que se importaron sin vincular: vuelvo a traer sus órdenes para saber qué variante era cada uno
+  // (los ítems se guardaron en el mismo orden que vienen en la orden)
+  type OP = { variant_id: number | null; sku?: string | null; name: string }
+  const variantes = new Map<number, OP>() // venta_item.id → producto de la orden en TN
+  const sueltos = items.filter(i => !i.producto_id && i.tn_order_id)
+  if (sueltos.length) {
+    const desde = sueltos.map(i => i.fecha).sort()[0]
+    const antes = new Date(Date.parse(desde + 'T00:00:00Z') - 86400000).toISOString()
+    const ordenes = new Map((await paginado<{ id: number; products?: OP[] }>(`/orders?created_at_min=${encodeURIComponent(antes)}`)).map(o => [String(o.id), o]))
+    const porVenta = new Map<string, number[]>()
+    for (const i of items) if (i.tn_order_id) porVenta.set(i.tn_order_id, [...(porVenta.get(i.tn_order_id) || []), i.id])
+    for (const [oid, ids] of porVenta) ids.forEach((id, k) => { const op = ordenes.get(oid)?.products?.[k]; if (op) variantes.set(id, op) })
+  }
+
+  const ventas = new Set<number>()
+  for (const it of items) {
+    const nombre = it.descripcion.replace(/^\[TN\]\s*/, '')
+    const [vinculado] = it.producto_id ? await sql<Producto[]>`select * from productos where id = ${it.producto_id}` : []
+    const op = variantes.get(it.id)
+    const p = vinculado || await buscarProducto(op?.variant_id, op?.sku, op?.name || nombre)
+    const variante = op?.variant_id || p?.tn_variant_id
+    let costo = (variante && costos.get(Number(variante))) || 0
+    if (!costo && !Number(it.costo)) costo = Number(p?.costo) || 0 // sin costo en TN: respaldo del sistema
+    if (!costo) { if (!Number(it.costo) && !res.sinCosto.includes(nombre)) res.sinCosto.push(nombre); continue }
+    if (costo !== Number(it.costo)) {
+      await sql`update venta_items set costo = ${costo} where id = ${it.id}`
+      ventas.add(it.venta_id); res.actualizados++
+    }
+  }
+  if (ventas.size) await sql`update ventas v set costo = coalesce((select sum(cantidad * costo) from venta_items where venta_id = v.id), 0)
+    where id in ${sql([...ventas])}`
   return res
 }

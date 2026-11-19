@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { Download, Link2, RefreshCw, Upload } from 'lucide-react'
+import { Calculator, Download, Link2, RefreshCw, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  guardarConfig, tnImportar, tnProbar, tnProductos, tnPublicar, tnUrlAutorizar, tnVincular, tnVincularAuto,
+  guardarConfig, tnImportar, tnProbar, tnProductos, tnPublicar, tnRecalcularCostos, tnUrlAutorizar, tnVincular, tnVincularAuto,
 } from '@/app/actions'
 import { useAccion } from '@/components/acciones'
 import { Campo, NativeSelect, PageHeader, Pill, Vacio } from '@/components/common'
@@ -87,9 +87,13 @@ export function TiendaNubeVista({ cfg, productos, callbackUrl, conectado, error 
               <CardDescription>Trae las órdenes pagadas como ventas (descuenta stock y suma a caja y ganancias). No duplica las ya importadas.{cfg.tn_ultima_importacion && ` Última: ${fechaCorta(cfg.tn_ultima_importacion)}.`}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
-              <div className="flex items-end gap-2">
+              <div className="flex flex-wrap items-end gap-2">
                 <Campo label="Desde"><Input type="date" value={desde} onChange={e => setDesde(e.target.value)} /></Campo>
                 <Button disabled={!conectada || pending} onClick={() => { setResImp(null); run(() => tnImportar(desde), { ok: r => setResImp(r ?? null) }) }}><Download /> Importar órdenes</Button>
+                <Button variant="outline" disabled={!conectada || pending} title="Pone en las ventas de Tienda Nube ya importadas el costo cargado en Tienda Nube (si TN no tiene costo, usa el del sistema)"
+                  onClick={() => run(tnRecalcularCostos, { ok: r => r && toast.success(`${r.actualizados} ítems con costo actualizado` + (r.sinCosto.length ? ` · siguen sin costo: ${r.sinCosto.join(', ')}` : '')) })}>
+                  <Calculator /> Recalcular costos
+                </Button>
               </div>
               {resImp && (
                 <div className="grid gap-2 text-sm">
