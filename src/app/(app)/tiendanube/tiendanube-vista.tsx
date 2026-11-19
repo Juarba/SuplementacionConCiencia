@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { Calculator, Download, Link2, RefreshCw, Upload } from 'lucide-react'
+import { Calculator, Download, Link2, RefreshCw, Upload, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  guardarConfig, tnImportar, tnProbar, tnProductos, tnPublicar, tnRecalcularCostos, tnUrlAutorizar, tnVincular, tnVincularAuto,
+  guardarConfig, tnImportar, tnProbar, tnAvisoActivar, tnAvisoDesactivar, tnProductos, tnPublicar, tnRecalcularCostos, tnUrlAutorizar, tnVincular, tnVincularAuto,
 } from '@/app/actions'
 import { useAccion } from '@/components/acciones'
 import { Campo, NativeSelect, PageHeader, Pill, Vacio } from '@/components/common'
@@ -102,6 +102,20 @@ export function TiendaNubeVista({ cfg, productos, callbackUrl, conectado, error 
                   {!!resImp.errores.length && <div className="rounded-lg bg-destructive/10 p-3 text-destructive">{resImp.errores.join(' · ')}</div>}
                 </div>
               )}
+              <div className="grid gap-2 border-t pt-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Zap className="size-4 text-muted-foreground" /> Importación automática
+                  {cfg.tn_aviso_url ? <Pill tono="ok">Activada</Pill> : <Pill tono="warn">Desactivada</Pill>}
+                  <Button size="sm" variant="outline" className="ml-auto" disabled={!conectada || pending}
+                    onClick={() => run(cfg.tn_aviso_url ? tnAvisoDesactivar : tnAvisoActivar)}>
+                    {cfg.tn_aviso_url ? 'Desactivar' : 'Activar'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Tienda Nube avisa al sistema cada vez que se paga una orden y entra sola como venta (descuenta stock, con los costos de Tienda Nube).
+                  Si alguna se pierde, &quot;Importar órdenes&quot; la trae sin duplicar.
+                </p>
+              </div>
             </CardContent>
           </Card>
           <Card>

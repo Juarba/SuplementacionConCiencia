@@ -1,4 +1,5 @@
 import 'server-only'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { sql } from './db'
 import { ahoraLocal, hoyLocal } from './format'
 import { getConfig } from './queries'
@@ -135,51 +136,121 @@ export async function autoPublicar(ids: number[]) {
   catch (e) { console.error('No se pudo actualizar stock en Tienda Nube:', (e as Error).message) }
 }
 
+type TnOrden = {
+  id: number; number: number; status: string; payment_status?: string; created_at: string; paid_at?: string; total: string; shipping_cost_customer?: string
+  customer?: { name?: string }; contact_name?: string; gateway_name?: string; shipping_option?: TnTexto
+  products?: { product_id?: number | null; variant_id: number | null; sku?: string | null; name: string; price: string; quantity: string | number }[]
+}
+type ResultadoImportacion = { importadas: number; existentes: number; sinVincular: string[]; errores: string[] }
+const nuevoResultado = (): ResultadoImportacion => ({ importadas: 0, existentes: 0, sinVincular: [], errores: [] })
+
 export async function importarOrdenes(desde?: string) {
   const cfg = await getConfig()
   const min = desde || cfg.tn_ultima_importacion || hoyLocal()
-  type O = {
-    id: number; number: number; status: string; created_at: string; paid_at?: string; total: string; shipping_cost_customer?: string
-    customer?: { name?: string }; contact_name?: string; gateway_name?: string; shipping_option?: TnTexto
-    products?: { variant_id: number | null; sku?: string | null; name: string; price: string; quantity: string | number }[]
-  }
   // un día antes por las dudas de la zona horaria: las órdenes ya importadas se saltean
   const antes = new Date(Date.parse(min + 'T00:00:00Z') - 86400000).toISOString()
-  const ordenes = await paginado<O>(`/orders?payment_status=paid&created_at_min=${encodeURIComponent(antes)}`)
-  const res = { importadas: 0, existentes: 0, sinVincular: [] as string[], errores: [] as string[] }
+  const ordenes = await paginado<TnOrden>(`/orders?payment_status=paid&created_at_min=${encodeURIComponent(antes)}`)
+  const res = nuevoResultado()
   // las ventas de TN usan el costo cargado en Tienda Nube; el del sistema queda como respaldo
   const costos = ordenes.length ? await costosPorVariante() : new Map<number, number>()
-  for (const o of ordenes) {
-    if (o.status === 'cancelled') continue
-    const [ya] = await sql`select id from ventas where tn_order_id = ${String(o.id)}`
-    if (ya) { res.existentes++; continue }
-    const items = []
-    for (const it of o.products || []) {
-      const p = await buscarProducto(it.variant_id, it.sku, it.name)
-      if (!p) res.sinVincular.push(`Orden #${o.number}: ${it.name}`)
-      const costo = (it.variant_id && costos.get(it.variant_id)) || undefined // undefined → crearVenta usa el costo del sistema
-      items.push({ producto_id: p ? p.id : null, descripcion: p ? `${p.marca} ${p.nombre}`.trim() : `[TN] ${it.name}`, cantidad: num(it.quantity), precio: num(it.price), costo })
-    }
-    const subtotal = items.reduce((a, i) => a + i.cantidad * i.precio, 0)
-    const envio = num(o.shipping_cost_customer)
-    const ajuste = Math.round((num(o.total) - subtotal - envio) * 100) / 100
-    // fecha de TN viene con zona horaria: la paso a la hora del negocio
-    const f = new Date(o.paid_at || o.created_at)
-    const fecha = isNaN(f.getTime()) ? ahoraLocal()
-      : new Intl.DateTimeFormat('sv-SE', { timeZone: NEGOCIO.zonaHoraria, dateStyle: 'short', timeStyle: 'short' }).format(f)
-    try {
-      await crearVenta({
-        fecha, cliente_nombre: o.customer?.name || o.contact_name || null,
-        medio_pago: 'Tienda Nube' + (o.gateway_name ? ` (${o.gateway_name})` : ''),
-        entrega: texto(o.shipping_option) || null, items, envio,
-        descuento: ajuste < 0 ? -ajuste : 0, recargo: ajuste > 0 ? ajuste : 0,
-        notas: `Orden Tienda Nube #${o.number}`, origen: 'tiendanube', tn_order_id: String(o.id),
-      })
-      res.importadas++
-    } catch (e) { res.errores.push(`Orden #${o.number}: ${(e as Error).message}`) }
-  }
+  for (const o of ordenes) await importarUna(o, costos, res)
   await sql`update config set valor = ${hoyLocal()} where clave = 'tn_ultima_importacion'`
   return res
+}
+
+/** Importa una sola orden (la usa el aviso automático de Tienda Nube). Solo si está pagada y no cancelada. */
+export async function importarOrdenPorId(id: number | string) {
+  const o = await tn<TnOrden>('GET', `/orders/${encodeURIComponent(String(id))}`)
+  const res = nuevoResultado()
+  if (o.payment_status !== 'paid' || o.status === 'cancelled') return res
+  await importarUna(o, await costosDeProductos(o), res)
+  return res
+}
+
+/** Costos de TN solo de los productos de una orden (más rápido que traer todo el catálogo) */
+async function costosDeProductos(o: TnOrden) {
+  const m = new Map<number, number>()
+  const ids = [...new Set((o.products || []).map(p => p.product_id).filter((x): x is number => !!x))]
+  for (const pid of ids) {
+    try {
+      const p = await tn<{ variants?: { id: number; cost?: string | null }[] }>('GET', `/products/${pid}`)
+      for (const v of p.variants || []) if (num(v.cost) > 0) m.set(v.id, num(v.cost))
+    } catch { /* producto borrado en TN: queda el costo del sistema */ }
+  }
+  return m
+}
+
+async function importarUna(o: TnOrden, costos: Map<number, number>, res: ResultadoImportacion) {
+  if (o.status === 'cancelled') return
+  const [ya] = await sql`select id from ventas where tn_order_id = ${String(o.id)}`
+  if (ya) { res.existentes++; return }
+  const items = []
+  for (const it of o.products || []) {
+    const p = await buscarProducto(it.variant_id, it.sku, it.name)
+    if (!p) res.sinVincular.push(`Orden #${o.number}: ${it.name}`)
+    const costo = (it.variant_id && costos.get(it.variant_id)) || undefined // undefined → crearVenta usa el costo del sistema
+    items.push({ producto_id: p ? p.id : null, descripcion: p ? `${p.marca} ${p.nombre}`.trim() : `[TN] ${it.name}`, cantidad: num(it.quantity), precio: num(it.price), costo })
+  }
+  const subtotal = items.reduce((a, i) => a + i.cantidad * i.precio, 0)
+  const envio = num(o.shipping_cost_customer)
+  const ajuste = Math.round((num(o.total) - subtotal - envio) * 100) / 100
+  // fecha de TN viene con zona horaria: la paso a la hora del negocio
+  const f = new Date(o.paid_at || o.created_at)
+  const fecha = isNaN(f.getTime()) ? ahoraLocal()
+    : new Intl.DateTimeFormat('sv-SE', { timeZone: NEGOCIO.zonaHoraria, dateStyle: 'short', timeStyle: 'short' }).format(f)
+  try {
+    await crearVenta({
+      fecha, cliente_nombre: o.customer?.name || o.contact_name || null,
+      medio_pago: 'Tienda Nube' + (o.gateway_name ? ` (${o.gateway_name})` : ''),
+      entrega: texto(o.shipping_option) || null, items, envio,
+      descuento: ajuste < 0 ? -ajuste : 0, recargo: ajuste > 0 ? ajuste : 0,
+      notas: `Orden Tienda Nube #${o.number}`, origen: 'tiendanube', tn_order_id: String(o.id),
+    })
+    res.importadas++
+  } catch (e) {
+    // si el aviso llegó dos veces al mismo tiempo, la segunda choca con tn_order_id único: ya está importada
+    if ((e as { code?: string }).code === '23505') res.existentes++
+    else res.errores.push(`Orden #${o.number}: ${(e as Error).message}`)
+  }
+}
+
+// ---------- Aviso automático de órdenes pagadas (webhook) ----------
+type TnWebhook = { id: number; event: string; url: string }
+const EVENTO = 'order/paid'
+
+async function webhooksDeOrdenes() {
+  try { return (await tn<TnWebhook[]>('GET', '/webhooks')).filter(w => w.event === EVENTO) }
+  catch (e) { if (e instanceof TnError && e.status === 404) return []; throw e }
+}
+
+/** Le pide a Tienda Nube que avise a `url` cada vez que se paga una orden (reemplaza avisos viejos a otras URLs) */
+export async function activarAviso(url: string) {
+  const cfg = await getConfig()
+  if (!cfg.tn_client_secret) throw new ErrorUsuario('Guardá el Client Secret de tu app: se usa para verificar que el aviso viene de Tienda Nube')
+  if (!url.startsWith('https://') || /localhost|tiendanube|nuvemshop/i.test(url))
+    throw new ErrorUsuario(`Tienda Nube no acepta avisos a ${url}: abrí el sistema desde su dirección pública (https) y probá de nuevo`)
+  const actuales = await webhooksDeOrdenes()
+  for (const w of actuales) if (w.url !== url) await tn('DELETE', `/webhooks/${w.id}`)
+  if (!actuales.some(w => w.url === url)) await tn('POST', '/webhooks', { event: EVENTO, url })
+  await sql`insert into config (clave, valor) values ('tn_aviso_url', ${url}) on conflict (clave) do update set valor = excluded.valor`
+}
+
+export async function desactivarAviso() {
+  for (const w of await webhooksDeOrdenes()) await tn('DELETE', `/webhooks/${w.id}`)
+  await sql`update config set valor = '' where clave = 'tn_aviso_url'`
+}
+
+/** Verifica la firma del aviso: HMAC-SHA256 (hex) del cuerpo tal cual llegó, con el Client Secret de la app */
+export async function firmaValida(cuerpo: string, firma: string | null) {
+  const cfg = await getConfig()
+  if (!cfg.tn_client_secret || !firma) return false
+  const esperada = createHmac('sha256', cfg.tn_client_secret).update(cuerpo, 'utf8').digest()
+  const recibida = Buffer.from(firma.trim(), 'hex')
+  return recibida.length === esperada.length && timingSafeEqual(recibida, esperada)
+}
+
+export async function tiendaConfigurada() {
+  return (await getConfig()).tn_store_id
 }
 
 /** Costos cargados en Tienda Nube por variante */

@@ -1,6 +1,6 @@
 'use server'
 
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { sql } from '@/lib/db'
@@ -277,6 +277,16 @@ export async function tnVincular(productoId: number, tnProductId: number | null,
     await sql`update productos set tn_product_id = ${tnProductId}, tn_variant_id = ${tnVariantId} where id = ${productoId}`
   })
 }
+/** Dirección pública del aviso: la de producción en Vercel (las de cada deploy piden login de Vercel) */
+async function urlAviso() {
+  const prodHost = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  if (prodHost) return `https://${prodHost}/api/tn/webhook`
+  const h = await headers()
+  const host = h.get('x-forwarded-host') || h.get('host') || 'localhost'
+  return `${h.get('x-forwarded-proto') || 'https'}://${host}/api/tn/webhook`
+}
+export const tnAvisoActivar = async () => accion(async () => TN.activarAviso(await urlAviso()), 'Importación automática activada')
+export const tnAvisoDesactivar = async () => accion(TN.desactivarAviso, 'Importación automática desactivada')
 export async function tnUrlAutorizar() {
   await requireSession()
   const cfg = await getConfig()
